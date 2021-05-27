@@ -484,7 +484,7 @@ CREATE TRIGGER saveDelTransport BEFORE DELETE ON Transport
 delimiter ;
 
 /*BEGIN ;
-DELETE FROM Transport WHERE transport_ID = 1;
+DELETE FROM Transport WHERE transport_ID < 5;
 ROLLBACK ;
 
 SELECT * FROM Transport;
@@ -787,6 +787,7 @@ END;//
 delimiter ;
 
 
+
 # 2.
 delimiter //
 CREATE FUNCTION randDATETIME (from_date DATETIME,  to_date DATETIME)
@@ -802,7 +803,6 @@ END;//
 delimiter ;
 
 # DROP FUNCTION randDATETIME;
-
 
 # 3.
 DELIMITER $$
@@ -831,7 +831,6 @@ END; $$
 DELIMITER ;
 
 
-
 # 4. Процедура, яка обчислює вартість авіаквитка
 DELIMITER $$
 CREATE PROCEDURE `calc_price_at`(OUT new_price DECIMAL, IN new_FhCpID INTEGER, IN new_idTt INTEGER)
@@ -846,6 +845,7 @@ END; $$
 DELIMITER ;
 
 # DROP PROCEDURE calc_price_at;
+
 
 
 # 5. Процедура, яка обчислює вартість морського квитка
@@ -872,6 +872,14 @@ END; $$
 DELIMITER ;
 
 
+/*CALL calc_price_st(@test,32,12);
+SELECT ROUND(@test,2) AS "Ціна", f_distance AS "Відстань", CONCAT('Одеса', ' - ', f_to) AS "Рейс"
+FROM Flights INNER JOIN Flights_has_Cities FhC
+ON Flights.flight_ID = FhC.idFlight
+WHERE idFlight = 32;*/
+
+# SELECT * FROM Ship_tickets;
+
 
 # 7. Процедура, яка обчислює вартість автобусного квитка
 DELIMITER $$
@@ -882,6 +890,15 @@ BEGIN
 END; $$
 DELIMITER ;
 
+
+/*SET @test := 394;
+CALL calc_price_tt(@test,1);
+SELECT ROUND(@test,2) AS "Ціна", f_distance AS "Відстань", CONCAT('Одеса', ' - ', f_to) AS "Рейс"
+FROM Flights INNER JOIN Flights_has_Cities FhC
+ON Flights.flight_ID = FhC.idFlight
+WHERE idFlight = 31;*/
+
+# SELECT * FROM Train_tickets;
 
 # 8. Процедура для пошуку маршрутів
 DELIMITER $$
@@ -918,7 +935,7 @@ BEGIN
     END IF;
 END; $$
 DELIMITER ;
-
+# DROP PROCEDURE find_routes;
 # CALL find_routes('Львів', 'Київ');
 
 /*SELECT type_name, CONCAT(f_from, ' - ', f_to) AS Flight, CONCAT(f_from, ' - ', city_name) AS Маршрут
@@ -965,7 +982,8 @@ END; $$
 DELIMITER ;
 
 # DROP PROCEDURE find_flight;
-# CALL find_flight('2021-08-09 20:18:56');
+/*CALL find_flight('2021-08-09 20:18:56');
+CALL find_flight('2021-08-09 00:00:00');*/
 # SELECT * FROM Flights;
 
 
@@ -981,6 +999,9 @@ DELIMITER ;
 
 # DROP PROCEDURE calc_end_time;
 
+# SELECT * FROM Flights;
+/*CALL calc_end_time(@test, 488, '2021-10-24 21:22:46', 50);
+SELECT 50 AS avg_speed, 488 AS distance, '2021-10-24 21:22:46' AS startTime, @test AS endTime;*/
 
 delimiter //
 CREATE TRIGGER setEndTimeFlight BEFORE INSERT ON Flights
@@ -1021,6 +1042,12 @@ CREATE TRIGGER checkDistance BEFORE INSERT ON Flights
    END;//
 delimiter ;
 # DROP TRIGGER checkDistance;
+
+BEGIN ;
+INSERT INTO Flights(idFirm, f_from, f_to, f_distance, idTransport, starttime)
+VALUES (8, 'Київ', 'Дніпро', -488, 51, '2021-10-24 21:22:46');
+ROLLBACK ;
+
 
 delimiter //
 CREATE TRIGGER checkStatus BEFORE UPDATE ON Flights
@@ -1090,7 +1117,11 @@ VALUES (8, 'Київ', 'Дніпро', 488, 51, '2021-10-24 21:22:46'),
        (1, 'Київ', 'Осло', 1630, 3, '2021-01-02 18:36:57');
 COMMIT ;
 
-# SELECT * FROM Flights;
+SELECT flight_ID, f_from, f_to, starttime, endtime, status FROM Flights WHERE flight_ID=6;
+
+
+# UPDATE Flights SET endtime = '2021-01-08 22:00:00'  WHERE  flight_ID = 6;
+
 BEGIN ;
 INSERT INTO Flights_has_Cities(idFlight, idCity1, idCity2)
 (SELECT flight_ID, city_ID, (SELECT city_ID FROM Cities WHERE f_to = city_name) FROM Flights, Cities
@@ -1258,6 +1289,7 @@ VALUES ( 12, 32),
        ( 13, 32),
        ( 13, 32);
 COMMIT ;
+
 # SELECT * FROM Ship_tickets;
 
 delimiter //
@@ -1289,7 +1321,8 @@ VALUES ( 1, 26, '2020-03-24 05:43:44', 23, NULL),
        ( 4, 29, '2020-11-19 02:10:09', 12, NULL),
        ( 5, 30, '2020-02-14 01:36:50', 88, NULL);
 COMMIT ;
-# SELECT * FROM Ship_tickets_has_Customers;
+
+SELECT * FROM Ship_tickets_has_Customers;
 
 BEGIN ;
 INSERT INTO Routes(Flights_has_Cities_primaryID, idCity)
@@ -1413,6 +1446,7 @@ VALUES ( 318, 10, 1),
        ( 953, 10, 9),
        ( 3754, 10, 10);
 COMMIT ;
+
 # SELECT * FROM Bus_tickets;
 
 BEGIN ;
@@ -1596,7 +1630,7 @@ ON Flights.idTransport = T.transport_ID
 WHERE type_name = 'Наземне';
 
 # 6.  most popular bus travel city
-SELECT city_name, COUNT(idCity2)
+SELECT city_name, COUNT(idCity2) AS count
 FROM Routes INNER JOIN Flights_has_Cities FhC
 ON Routes.Flights_has_Cities_primaryID = FhC.primaryID INNER JOIN Cities C
 ON FhC.idCity2 = C.city_ID INNER JOIN Flights
@@ -1644,7 +1678,7 @@ LIMIT 1);
 
 
 # 10.  Автобусні рейси до Харкова і Києва дешевше середнього
-SELECT b_ticket_ID, CONCAT(f_from, ' - ', city_name) AS Flight, CONCAT(bt_price, ' грн.')
+SELECT b_ticket_ID, CONCAT(f_from, ' - ', city_name) AS Flight, CONCAT(bt_price, ' грн.') AS price
 FROM Flights INNER JOIN Flights_has_Cities FhC
 ON Flights.flight_ID = FhC.idFlight INNER JOIN Routes R
 ON FhC.primaryID = R.Flights_has_Cities_primaryID INNER JOIN Bus_tickets Bt
@@ -1687,26 +1721,16 @@ ON FhC.idFlight = F.flight_ID INNER JOIN Cities C
 ON R.idCity = C.city_ID
 WHERE MONTH(starttime) IN (6,7,8);
 
+
+
 # 3.
-CREATE VIEW amount_of_sold_tickets AS SELECT type_afterpay, LPAD(CONCAT(COUNT(typeticket_ID), ' шт.'),10,' ') AS Sold
-FROM Type_tickets INNER JOIN Airplane_tickets A
-ON Type_tickets.typeticket_ID = A.idType_tickets INNER JOIN Airplane_tickets_has_Customers AthC
-ON A.a_ticket_ID = AthC.Airplane_tickets_a_ticket_ID GROUP BY 1
-UNION
-SELECT type_afterpay, LPAD(CONCAT(COUNT(typeticket_ID), ' шт.'),10,' ')
-FROM Type_tickets INNER JOIN Train_tickets T
-ON Type_tickets.typeticket_ID = T.idType_tickets INNER JOIN Train_tickets_has_Customers TthC
-ON T.t_ticket_ID = TthC.Train_tickets_t_ticket_ID GROUP BY 1
-UNION
-SELECT type_afterpay, LPAD(CONCAT(COUNT(typeticket_ID), ' шт.'),10,' ')
-FROM Type_tickets INNER JOIN Bus_tickets B
-ON Type_tickets.typeticket_ID = B.idType_tickets INNER JOIN Bus_tickets_has_Customers BthC
-ON B.b_ticket_ID = BthC.Bus_tickets_b_ticket_ID GROUP BY 1
-UNION
-SELECT type_afterpay, LPAD(CONCAT(COUNT(typeticket_ID), ' шт.'),10,' ')
-FROM Type_tickets INNER JOIN Ship_tickets S
-ON Type_tickets.typeticket_ID = S.idType_tickets INNER JOIN Ship_tickets_has_Customers SthC
-ON S.s_ticket_ID = SthC.Ship_tickets_s_ticket_ID GROUP BY 1;
+CREATE VIEW unused_transport AS SELECT *
+FROM Transport
+WHERE transport_ID NOT IN (
+    SELECT DISTINCT transport_ID
+    FROM Transport INNER JOIN Flights F
+    ON Transport.transport_ID = F.idTransport);
+
 
 # 4.
 CREATE VIEW foreign_flights AS SELECT T.name AS Transport, CONCAT(f_from, ' - ', f_to) AS Flight, F.name AS Firm, type_name AS Type_trip
@@ -1738,12 +1762,24 @@ CREATE USER 'Developer'@'localhost:3306' IDENTIFIED BY 'helloWorld';
 GRANT ALL PRIVILEGES ON Tickets_booking.* TO 'Developer'@'localhost:3306';
 FLUSH PRIVILEGES;
 
+# SHOW GRANTS FOR 'Developer'@'localhost:3306';
+
 CREATE USER 'Admin'@'localhost:3306' IDENTIFIED BY 'myAdmin';
 GRANT SELECT, INSERT, DELETE, UPDATE, CREATE VIEW, EXECUTE ON Tickets_booking.* TO 'Admin'@'localhost:3306';
 FLUSH PRIVILEGES;
+
+# SHOW GRANTS FOR 'Admin'@'localhost:3306';
 
 CREATE USER 'Customer'@'localhost:3306' IDENTIFIED BY 'qwerty123';
 GRANT SELECT ON Tickets_booking.* TO 'Customer'@'localhost:3306';
 FLUSH PRIVILEGES;
 
+# SHOW GRANTS FOR 'Customer'@'localhost:3306';
+
 # SELECT User, Host FROM mysql.user WHERE Host LIKE '%3306';
+
+# SHOW TABLES;
+
+/*SELECT CONCAT(GROUP_CONCAT(' ',COLUMN_NAME),';')
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'type_transportations';*/

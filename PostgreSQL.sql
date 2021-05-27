@@ -295,8 +295,10 @@ CREATE TABLE IF NOT EXISTS Transport_has_Type_tickets (
 -- -----------------------------------------------------
 -- ЗАПОВНЕННЯ ТАБЛИЦЬ
 -- -----------------------------------------------------
+BEGIN ;
 INSERT INTO Type_transportations(type_name)
 VALUES ('Повітряне'),('Колійне'),('Водне'),('Наземне');
+COMMIT ;
 
 -- SELECT * FROM Type_transportations;
 
@@ -475,7 +477,6 @@ CREATE OR REPLACE FUNCTION insertInDel_Transport() RETURNS trigger AS $saveDelTr
         RETURN NULL;
     END;
 $saveDelTransport$ LANGUAGE plpgsql;
-
 
 CREATE TRIGGER saveDelTransport BEFORE DELETE ON Transport
    FOR EACH ROW EXECUTE PROCEDURE insertInDel_Transport();
@@ -778,7 +779,7 @@ CREATE TRIGGER setEndTimeFlight BEFORE INSERT ON Flights
    FOR EACH ROW EXECUTE PROCEDURE calc_end_time();
 
 
-CREATE OR REPLACE FUNCTION validDistance() RETURNS trigger AS $checkDistance$
+CREATE OR REPLACE FUNCTION validFlight() RETURNS trigger AS $checkDistance$
     BEGIN
         CASE
             WHEN NEW.f_distance <= 0
@@ -793,7 +794,7 @@ $checkDistance$ LANGUAGE plpgsql;
 -- DROP TRIGGER setEndTimeFlight ON Flights CASCADE;
 
 CREATE TRIGGER checkDistance BEFORE INSERT ON Flights
-   FOR EACH ROW EXECUTE PROCEDURE validDistance();
+   FOR EACH ROW EXECUTE PROCEDURE validFlight();
 
 /*BEGIN ;
 INSERT INTO Flights(idFirm, f_from, f_to, f_distance, idTransport, starttime)
@@ -816,7 +817,7 @@ $checkStatus$ LANGUAGE plpgsql;
 
 -- DROP TRIGGER setEndTimeFlight ON Flights CASCADE;
 
-CREATE TRIGGER checkStatus BEFORE UPDATE ON Flights
+CREATE TRIGGER checkStatus BEFORE UPDATE OR INSERT ON Flights
    FOR EACH ROW EXECUTE PROCEDURE setStatus();
 
 
@@ -1378,6 +1379,10 @@ ON C.city_ID = FhC.idCity2
 WHERE country <> 'Україна'
 ORDER BY EXTRACT(EPOCH FROM (endtime - starttime)) / 3600.00 DESC;
 
+-- SELECT f_from, f_to, f_distance, starttime, endtime, F.name, T.name
+-- FROM Flights INNER JOIN Firms F on F.firm_ID = Flights.idFirm INNER JOIN Transport T on T.transport_ID = Flights.idTransport
+-- WHERE f_to = 'Мадрид';
+-- SELECT * FROM Flights;
 
 -- 7. Транспорт та квитки на нього
 SELECT CONCAT(name, ' ', number), STRING_AGG(CONCAT(type_afterpay, ': ', count_seats_type, ' шт.'), ' ')
@@ -1441,6 +1446,201 @@ HAVING  1 < COUNT(route_ID)
 ORDER BY 3 DESC;
 
 
+
+
+
+
+-- ФУНКЦІЇ І ПРОЦЕДУРИ
+
+
+
+-- 1. Функція знходження індекса останнього входження символа в строку
+CREATE  OR REPLACE  FUNCTION LAST_POST(TEXT, CHAR)
+RETURNS INTEGER
+AS $$
+    SELECT LENGTH($1) - LENGTH(REGEXP_REPLACE($1, '.*' || $2, ''));
+$$ LANGUAGE SQL IMMUTABLE;
+
+SELECT LAST_POST('I love PostgreSQL', 'e');
+
+-- 2. Функція обчислення різниці між датами в днях
+CREATE OR REPLACE FUNCTION DATEDIFF(timestamp, timestamp)
+RETURNS INTEGER
+AS $$
+    SELECT ABS((CAST($1 AS date) - CAST($2 AS date))::INTEGER) as DateDifference
+$$ LANGUAGE SQL IMMUTABLE;
+
+-- SELECT DATEDIFF('2000-01-01 00:00:00','2000-01-15 00:00:00');
+
+-- 3. Функція пошуку авіквитків за ПІБ пасажира
+CREATE OR REPLACE FUNCTION search_customer_tickets(search_name TEXT)
+RETURNS SETOF text AS $$
+DECLARE
+    result TEXT DEFAULT '';
+    records RECORD;
+    myCursor CURSOR(search_name TEXT)
+    FOR SELECT c_name AS Name, CONCAT(f_from, ' - ', f_to) AS Flight,
+                        CONCAT(starttime, ' - ', endtime) AS Time, at_class AS Class, a_seat AS Seat,
+                         at_price AS Price, a_booking_time::TIMESTAMP(0) AS Booking
+                FROM Customers LEFT JOIN Airplane_tickets_has_Customers AthC
+                ON Customers.customer_ID = AthC.Customers_customer_ID LEFT JOIN Airplane_tickets A
+                ON A.a_ticket_ID = AthC.Airplane_tickets_a_ticket_ID INNER JOIN Flights_has_Cities FhC
+                ON A.Flights_has_Cities_primaryID = FhC.primaryID INNER JOIN Flights F
+                ON FhC.idFlight = F.flight_ID;
+
+BEGIN
+    OPEN myCursor(search_name);-- відкриваєм курсор
+    LOOP
+    FETCH myCursor INTO records;
+    EXIT WHEN NOT FOUND;
+    IF records.Name = search_name
+        THEN result := 'Пасажир: ' || records.Name || '  Рейс: ' || records.Flight || '  Час: (' || records.Time || ')  Клас: ' || records.Class
+                           || '  Місце: ' || records.Seat || '  Ціна: ' || records.Price || '  Час бронювання: ' || records.Booking;
+        RETURN NEXT result;
+    END IF;
+    END LOOP;
+    CLOSE myCursor;-- закриваєм курсор
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- SELECT search_customer_tickets('Сомко Яромира Остапівна');
+-- SELECT * FROM Customers INNER JOIN Airplane_tickets_has_Customers AthC on Customers.customer_ID = AthC.Customers_customer_ID;
+-- 4.
+CREATE OR REPLACE FUNCTION update_status ()
+RETURNS TABLE(flight_ID INT, idFirm INT, idTransport INT, from_city VARCHAR(45), to_city VARCHAR(45), distance FLOAT, timeStart TIMESTAMP(0), timeEnd TIMESTAMP(0), flight_status FLIGHTSTATUS)
+AS $$
+BEGIN
+    RETURN QUERY
+    UPDATE Flights
+    SET status = 'Відбувся'
+    WHERE endtime < CURRENT_TIMESTAMP AND status = 'Очікується'
+    RETURNING *;
+END;
+$$ LANGUAGE plpgsql;
+
+-- DROP FUNCTION update_status();
+
+-- SELECT * FROM Flights;
+-- BEGIN ;
+-- SELECT * from update_status();
+-- ROLLBACK ;
+
+-- 5. Функція видалення
+CREATE OR REPLACE FUNCTION auto_del(tableName TEXT, columnName TEXT, relOper TEXT, value TEXT)
+RETURNS VOID AS
+$$
+BEGIN
+    EXECUTE 'DELETE FROM ' || tableName || ' WHERE ' || columnName || ' ' || relOper || E' \'' || value || E'\'';
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+/*BEGIN ;
+SELECT auto_del('Customers', 'c_name', 'Тарасович Ратимир Вадимович');
+ROLLBACK ;
+SELECT * FROM Customers;*/
+
+
+-- -------------------------------------getStartTime------------------------------------------
+CREATE OR REPLACE FUNCTION getStartTime(TEXT, TEXT)
+RETURNS TEXT
+AS $$
+    SELECT string_agg(starttime::TEXT, ', ')
+    FROM Flights
+    WHERE f_from = $1 AND f_to = $2
+    ORDER BY 1
+    LIMIT 1;
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION getStartTime(TEXT, TEXT, DATE, DATE)
+RETURNS TEXT
+AS $$
+    SELECT string_agg(starttime::TEXT, ', ')
+    FROM Flights
+    WHERE f_from = $1 AND f_to = $2 AND (starttime BETWEEN $3::TIMESTAMP AND $4::TIMESTAMP)
+    ORDER BY 1
+    LIMIT 1;
+$$ LANGUAGE SQL IMMUTABLE;
+
+-- DROP FUNCTION getStartTime(TEXT, TEXT);
+-- DROP FUNCTION getStartTime(TEXT, TEXT, DATE, DATE);
+
+-- -------------------------------------------------------------------------------
+
+/*SELECT f_from, f_to, starttime AS from_table, getStartTime(f_from, f_to, '2021-01-01', '2021-09-01') AS from_function
+FROM Flights
+ORDER BY 1;*/
+
+-- -------------------------------------timeTable------------------------------------------
+CREATE OR REPLACE FUNCTION timeTable()
+RETURNS TABLE(Cities VARCHAR(45), "Івано-Франківськ" TEXT, Вінниця TEXT, Дніпро TEXT , Донецьк TEXT, Житомир TEXT, Запоріжжя TEXT,
+                            Київ TEXT, Кропивницький TEXT, Луганськ TEXT, Луцьк TEXT, Львів TEXT,
+                            Миколаїв TEXT, Одеса TEXT, Полтава TEXT, Рівне TEXT, Суми TEXT,
+                            Тернопіль TEXT, Ужгород TEXT, Харків TEXT, Херсон TEXT, Хмельницький TEXT,
+                             Черкаси TEXT, Чернівці TEXT, Чернігів TEXT)
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT DISTINCT city_name, getStartTime(city_name,'Івано-Франківськ') AS "Івано-Франківськ",
+                getStartTime(city_name,'Вінниця') AS "Вінниця", getStartTime(city_name,'Дніпро') AS "Дніпро",
+                getStartTime(city_name,'Донецьк') AS "Донецьк",
+                getStartTime(city_name,'Житомир') AS "Житомир", getStartTime(city_name,'Запоріжжя') AS "Запоріжжя",
+                getStartTime(city_name,'Київ') AS "Київ", getStartTime(city_name,'Кропивницький') AS "Кропивницький",
+                getStartTime(city_name,'Луганськ') AS "Луганськ", getStartTime(city_name,'Луцьк') AS "Луцьк",
+                getStartTime(city_name,'Львів') AS "Львів", getStartTime(city_name,'Миколаїв') AS "Миколаїв",
+                getStartTime(city_name,'Одеса') AS "Одеса", getStartTime(city_name,'Полтава') AS "Полтава",
+                getStartTime(city_name,'Рівне') AS "Рівне", getStartTime(city_name,'Суми') AS "Суми",
+                getStartTime(city_name,'Тернопіль') AS "Тернопіль", getStartTime(city_name,'Ужгород') AS "Ужгород",
+                getStartTime(city_name,'Харків') AS "Харків", getStartTime(city_name,'Херсон') AS "Херсон",
+                getStartTime(city_name,'Хмельницький') AS "Хмельницький", getStartTime(city_name,'Черкаси') AS "Черкаси",
+                getStartTime(city_name,'Чернівці') AS "Чернівці", getStartTime(city_name,'Чернігів') AS "Чернігів"
+    FROM Flights LEFT JOIN Flights_has_Cities FhC on Flights.flight_ID = FhC.idFlight
+    INNER JOIN Cities C on C.city_ID = FhC.idCity1 OR C.city_ID = FhC.idCity2
+    WHERE country = 'Україна'
+    ORDER BY 1;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION timeTable(DATE, DATE)
+RETURNS TABLE(Cities VARCHAR(45), "Івано-Франківськ" TEXT, Вінниця TEXT, Дніпро TEXT , Донецьк TEXT, Житомир TEXT, Запоріжжя TEXT,
+                            Київ TEXT, Кропивницький TEXT, Луганськ TEXT, Луцьк TEXT, Львів TEXT,
+                            Миколаїв TEXT, Одеса TEXT, Полтава TEXT, Рівне TEXT, Суми TEXT,
+                            Тернопіль TEXT, Ужгород TEXT, Харків TEXT, Херсон TEXT, Хмельницький TEXT,
+                             Черкаси TEXT, Чернівці TEXT, Чернігів TEXT)
+AS $$
+BEGIN
+    IF $1 > $2
+        THEN RAISE 'ERROR: timeTable(N DATE,M DATE); N must be <= M';
+    ELSE RETURN QUERY
+        SELECT DISTINCT city_name, getStartTime(city_name,'Івано-Франківськ', $1, $2) AS "Івано-Франківськ",
+                    getStartTime(city_name,'Вінниця', $1, $2) AS "Вінниця", getStartTime(city_name,'Дніпро', $1, $2) AS "Дніпро",
+                    getStartTime(city_name,'Донецьк', $1, $2) AS "Донецьк",
+                    getStartTime(city_name,'Житомир', $1, $2) AS "Житомир", getStartTime(city_name,'Запоріжжя', $1, $2) AS "Запоріжжя",
+                    getStartTime(city_name,'Київ', $1, $2) AS "Київ", getStartTime(city_name,'Кропивницький', $1, $2) AS "Кропивницький",
+                    getStartTime(city_name,'Луганськ', $1, $2) AS "Луганськ", getStartTime(city_name,'Луцьк', $1, $2) AS "Луцьк",
+                    getStartTime(city_name,'Львів', $1, $2) AS "Львів", getStartTime(city_name,'Миколаїв', $1, $2) AS "Миколаїв",
+                    getStartTime(city_name,'Одеса', $1, $2) AS "Одеса", getStartTime(city_name,'Полтава', $1, $2) AS "Полтава",
+                    getStartTime(city_name,'Рівне', $1, $2) AS "Рівне", getStartTime(city_name,'Суми', $1, $2) AS "Суми",
+                    getStartTime(city_name,'Тернопіль', $1, $2) AS "Тернопіль", getStartTime(city_name,'Ужгород', $1, $2) AS "Ужгород",
+                    getStartTime(city_name,'Харків', $1, $2) AS "Харків", getStartTime(city_name,'Херсон', $1, $2) AS "Херсон",
+                    getStartTime(city_name,'Хмельницький', $1, $2) AS "Хмельницький", getStartTime(city_name,'Черкаси', $1, $2) AS "Черкаси",
+                    getStartTime(city_name,'Чернівці', $1, $2) AS "Чернівці", getStartTime(city_name,'Чернігів', $1, $2) AS "Чернігів"
+        FROM Flights LEFT JOIN Flights_has_Cities FhC on Flights.flight_ID = FhC.idFlight
+        INNER JOIN Cities C on C.city_ID = FhC.idCity1 OR C.city_ID = FhC.idCity2
+        WHERE country = 'Україна'
+        ORDER BY 1;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+-- -------------------------------------------------------------------------------
+-- DROP FUNCTION timeTable();
+-- DROP FUNCTION timeTable(DATE, DATE);
+-- SELECT * FROM timeTable();
+-- SELECT * FROM timeTable('2021-01-01', '2021-03-01');
+
+
+
+
 -- ПРЕДСТАВЛЕННЯ
 
 -- 1. Фірми, що проводять тільки закордонні рейси і кількість цих рейсів
@@ -1459,23 +1659,7 @@ HAVING COUNT(flight_ID) <> 0)
 GROUP BY 1;
 
 
--- 2. Представлення, що визначає тривалість рейсів
-CREATE VIEW flight_duration AS SELECT CONCAT(f_from, ' - ', f_to) AS Flight,
-       CONCAT(ROUND((EXTRACT(EPOCH FROM (endtime - starttime)) / 3600.00)::NUMERIC, 1), ' год.') AS Hours,
-    CASE
-        WHEN EXTRACT(EPOCH FROM (endtime - starttime)) / 3600.00 <= 3.0
-            THEN 'Швидкий'
-        WHEN EXTRACT(EPOCH FROM (endtime - starttime)) / 3600.00 <= 9.0
-            THEN 'Середній'
-        ELSE 'Тривалий'
-    END AS Тривалість_рейсу
-FROM Flights INNER JOIN Flights_has_Cities FhC
-ON Flights.flight_ID = FhC.idFlight INNER JOIN Cities C
-ON C.city_ID = FhC.idCity2
-ORDER BY EXTRACT(EPOCH FROM (endtime - starttime)) / 3600.00 DESC;
-
-
--- 3. Транспорт та квитки на нього
+-- 2. Транспорт та квитки на нього
 CREATE VIEW transport_tickets AS SELECT CONCAT(name, ' ', number), STRING_AGG(CONCAT(type_afterpay, ': ', count_seats_type, ' шт.'), ' ')
 FROM Transport INNER JOIN Transport_has_Type_tickets ThTt
 ON Transport.transport_ID = ThTt.Transport_idTransport INNER JOIN Type_tickets Tt
@@ -1483,7 +1667,7 @@ ON Tt.typeticket_ID = ThTt.Type_ticketa_idType_tickets
 GROUP BY 1;
 
 
--- 4. Сума витрачиних коштів кожним пасажиром
+-- 3. Сума витрачиних коштів кожним пасажиром
 CREATE VIEW customer_money AS SELECT customer_ID, c_name, LPAD(CONCAT(ROUND(COALESCE(at_price, 0) +
                             COALESCE(Bt.bt_price, 0) + COALESCE(Tt.tt_price, 0) +
                             COALESCE(st_price, 0), 2), ' грн.'), 18, ' ') AS total
@@ -1503,7 +1687,7 @@ ON R.route_ID = T.idRoute
 ORDER BY 3 DESC;
 
 
--- 5. Кількість маршрутів на кожному рейсі
+-- 4. Кількість маршрутів на кожному рейсі
 CREATE VIEW routes_on_flight AS SELECT CONCAT(f_from, ' - ', f_to) AS Flight, COUNT(route_ID) AS number_of_routes,
        STRING_AGG(CONCAT(f_from, ' - ', city_name), ', ')
 FROM Flights INNER JOIN Flights_has_Cities FhC
@@ -1517,88 +1701,19 @@ ON C.city_ID = R.idCity
 GROUP BY 1
 ORDER BY 2 DESC;
 
+-- 5. Представлення, яке об`єднує найважливішу інформацію про авіаквитки
+CREATE VIEW tickets_between_date AS SELECT c_name AS Name, CONCAT(f_from, ' - ', f_to) AS Flight,
+        CONCAT(starttime, ' - ', endtime) AS Time, at_class AS Class, a_seat AS Seat,
+         at_price AS Price, a_booking_time::TIMESTAMP(0) AS Booking
+FROM Customers LEFT JOIN Airplane_tickets_has_Customers AthC
+ON Customers.customer_ID = AthC.Customers_customer_ID LEFT JOIN Airplane_tickets A
+ON A.a_ticket_ID = AthC.Airplane_tickets_a_ticket_ID INNER JOIN Flights_has_Cities FhC
+ON A.Flights_has_Cities_primaryID = FhC.primaryID INNER JOIN Flights F
+ON FhC.idFlight = F.flight_ID INNER JOIN Firms F2
+ON F.idFirm = F2.firm_ID INNER JOIN Type_transportations Tt
+ON F2.idTransportation = Tt.transportation_ID
+WHERE type_name = 'Повітряне';
 
--- ФУНКЦІЇ І ПРОЦЕДУРИ
-
--- 1. Функція знходження індекса останнього входження символа в строку
-CREATE  OR REPLACE  FUNCTION LAST_POST(TEXT, CHAR)
-RETURNS INTEGER
-AS $$
-    SELECT LENGTH($1) - LENGTH(REGEXP_REPLACE($1, '.*' || $2, ''));
-$$ LANGUAGE SQL IMMUTABLE;
-
-
--- 2. Функція обчислення різниці між датами в днях
-CREATE OR REPLACE FUNCTION DATEDIFF(timestamp, timestamp)
-RETURNS INTEGER
-AS $$
-    SELECT ABS(CAST($1 AS date) - CAST($2 AS date)) as DateDifference
-$$ LANGUAGE SQL IMMUTABLE;
-
--- 3. Функція пошуку авіквитків за ПІБ пасажира
-CREATE OR REPLACE FUNCTION search_customer_tickets(search_name TEXT)
-RETURNS SETOF text AS $$
-DECLARE
-    result TEXT DEFAULT '';-- в цю строку бужем записувати результат і виводити її
-    records RECORD; -- це така хуйня в яку запусуються рядки коли курсор проходиться по запиті кр4 буферна змінна так сказати
-    myCursor CURSOR(search_name TEXT)
-    FOR SELECT c_name AS Name, CONCAT(f_from, ' - ', f_to) AS Flight, -- Тут тикнеш свій запит
-                        CONCAT(starttime, ' - ', endtime) AS Time, at_class AS Class, a_seat AS Seat,
-                         at_price AS Price, a_booking_time::TIMESTAMP(0) AS Booking
-                FROM Customers LEFT JOIN Airplane_tickets_has_Customers AthC
-                ON Customers.customer_ID = AthC.Customers_customer_ID LEFT JOIN Airplane_tickets A
-                ON A.a_ticket_ID = AthC.Airplane_tickets_a_ticket_ID INNER JOIN Flights_has_Cities FhC
-                ON A.Flights_has_Cities_primaryID = FhC.primaryID INNER JOIN Flights F
-                ON FhC.idFlight = F.flight_ID;
-
-BEGIN -- Починаєм транзакціяю бо інакше неваловшно курсор юзати
-    OPEN myCursor(search_name);-- відкриваєм курсор
-    LOOP -- цей луп залупа цикл якийсь неваловшний
-    FETCH myCursor INTO records;-- фетч рухає курсор і записує рядок в РЕКОРДС
-    EXIT WHEN NOT FOUND;--це умова виходу з залупи
-    IF records.Name = search_name--перевіряєм умову якусь, якщо валовшно то записуєм в резулт
-        THEN result := 'Пасажир: ' || records.Name || '  Рейс: ' || records.Flight || '  Час: (' || records.Time || ')  Клас: ' || records.Class
-                           || '  Місце: ' || records.Seat || '  Ціна: ' || records.Price || '  Час бронювання: ' || records.Booking;
-        RETURN NEXT result;--я хз як цей ретурн тут пашит но коби здоровлє
-    END IF;
-    END LOOP; -- це кінец залупи
-    CLOSE myCursor;-- закриваєм курсор
-END;
-$$ LANGUAGE plpgsql;
-
-
--- 4. SELECT search_customer_tickets('Ніколенко Ромашка Зорянівна') AS "Результат";
-CREATE OR REPLACE FUNCTION update_status ()
-RETURNS TEXT
-AS $$
-BEGIN
-    UPDATE Flights
-    SET status = 'Відбувся'
-    WHERE endtime < CURRENT_TIMESTAMP AND status = 'Очікується';
-    RETURN 'Update successful!';
-END;
-$$ LANGUAGE plpgsql;
-
--- DROP FUNCTION update_status();
-
--- SELECT * FROM Flights;
--- BEGIN ;
--- SELECT update_status();
--- ROLLBACK ;
-
--- 5. Функція видалення
-CREATE OR REPLACE FUNCTION auto_del(tableName TEXT, columnName TEXT, value TEXT)
-RETURNS VOID AS
-$$
-BEGIN
-    EXECUTE 'DELETE FROM ' || tableName || ' WHERE ' || columnName || E' = \'' || value || E'\'';
-END;
-$$ LANGUAGE plpgsql VOLATILE;
-
-/*BEGIN ;
-SELECT auto_del('Customers', 'c_name', 'Тарасович Ратимир Вадимович');
-ROLLBACK ;
-SELECT * FROM Customers;*/
 
 
 
@@ -1611,6 +1726,6 @@ CREATE USER Administrator WITH PASSWORD 'Administrator123';
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO Administrator;
 
 CREATE USER Customer WITH PASSWORD 'Customer123';
-GRANT SELECT ON * TO Customer;
+GRANT SELECT ON tickets_booking.public.* TO Customer;
 
--- select * from pg_shadow;
+
